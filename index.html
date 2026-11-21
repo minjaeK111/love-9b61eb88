@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<title>My Love</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="My Love">
+<meta name="theme-color" content="#020204">
+<style>
+  /* Layout: one full-bleed canvas. The whole piece (terminal intro, LED lettering, heart) is drawn in script.
+     Single committed look: a dark CRT terminal turning crimson, so no light theme. */
+  :root {
+    color-scheme: dark;
+    --bg: #020204;
+    --ink: #d7e1e6;
+  }
+  html, body { height: 100%; background: var(--bg); color: var(--ink); }
+  body { margin: 0; overflow: hidden; overscroll-behavior: none; }
+  /* 화면에 고정하고 노치/홈 바(안전영역)를 피한다. 100dvh 는 사파리 주소창이 늘고 줄어도 높이를 맞춰 준다. */
+  canvas#c {
+    display: block; position: fixed;
+    left: env(safe-area-inset-left, 0px); top: env(safe-area-inset-top, 0px);
+    width: calc(100% - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+    height: calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    height: calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+    touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent; cursor: pointer;
+  }
+</style>
+<canvas id="c" aria-label="이현에게 보내는 고백 애니메이션"></canvas>
+<script>
+(() => {
+// ───────── 여기만 바꾸면 돼요 ─────────
+const CFG = {
+  text: "I LOVE YIHYUN",   // LED 로 쓸 문구 (영문/숫자/! ? . , - 지원, < 는 하트)
+  to:   "이현",             // 받는 사람
+  from: "민재",             // 보내는 사람
+  msg:  "바부야 사랑해",     // 고백 한 줄
+};
+// ──────────────────────────────────
+
+const T_WRITE = 6.5, HOT_TIME = 0.5;
+const RED = [238, 36, 22], HOTC = [255, 178, 84], PALE = [255, 190, 205];
+const HB = [240, 30, 55], HT = [255, 105, 160];
+const G = [70, 255, 140], C = [90, 205, 255], P = [255, 110, 170], WH = [215, 225, 230];
+const DIM = [110, 130, 140], YE = [255, 205, 90], MG = [255, 120, 200];
+const MONO = '"Cascadia Mono",Consolas,Menlo,"SF Mono","Courier New",monospace';
+const KR = '"Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR","Nanum Gothic",sans-serif';
+
+const clamp = (v, lo = 0, hi = 1) => v < lo ? lo : v > hi ? hi : v;
+const lerpC = (a, b, k) => a.map((v, i) => v + (b[i] - v) * k);
+const rgb = (c, k = 1) => `rgb(${Math.min(255, c[0] * k | 0)},${Math.min(255, c[1] * k | 0)},${Math.min(255, c[2] * k | 0)})`;
+const rnd = (a, b) => a + Math.random() * (b - a);
+const isKR = s => /[^\u0000-⹿]/.test(s);
+const fam = s => isKR(s) ? KR : MONO;
+
+// 5x7 각진 픽셀 글꼴 (X = 켜짐). 굵게 + 둥글게 처리해서 LED 로 찍는다.
+const FONT = {
+  A:".XXX. X...X X...X XXXXX X...X X...X X...X", B:"XXXX. X...X X...X XXXX. X...X X...X XXXX.",
+  C:".XXXX X.... X.... X.... X.... X.... .XXXX", D:"XXXX. X...X X...X X...X X...X X...X XXXX.",
+  E:"XXXXX X.... X.... XXXX. X.... X.... XXXXX", F:"XXXXX X.... X.... XXXX. X.... X.... X....",
+  G:".XXXX X.... X.... X..XX X...X X...X .XXXX", H:"X...X X...X X...X XXXXX X...X X...X X...X",
+  I:"XXXXX ..X.. ..X.. ..X.. ..X.. ..X.. XXXXX", J:"....X ....X ....X ....X ....X X...X .XXX.",
+  K:"X...X X..X. X.X.. XX... X.X.. X..X. X...X", L:"X.... X.... X.... X.... X.... X.... XXXXX",
+  M:"X...X XX.XX X.X.X X.X.X X...X X...X X...X", N:"X...X XX..X XX..X X.X.X X..XX X..XX X...X",
+  O:".XXX. X...X X...X X...X X...X X...X .XXX.", P:"XXXX. X...X X...X XXXX. X.... X.... X....",
+  Q:".XXX. X...X X...X X...X X.X.X X..X. .XX.X", R:"XXXX. X...X X...X XXXX. X.X.. X..X. X...X",
+  S:".XXXX X.... X.... .XXX. ....X ....X XXXX.", T:"XXXXX ..X.. ..X.. ..X.. ..X.. ..X.. ..X..",
+  U:"X...X X...X X...X X...X X...X X...X .XXX.", V:"X...X X...X X...X X...X X...X .X.X. ..X..",
+  W:"X...X X...X X...X X.X.X X.X.X XX.XX X...X", X:"X...X X...X .X.X. ..X.. .X.X. X...X X...X",
+  Y:"X...X X...X .X.X. ..X.. ..X.. ..X.. ..X..", Z:"XXXXX ....X ...X. ..X.. .X... X.... XXXXX",
+  0:".XXX. X...X X..XX X.X.X XX..X X...X .XXX.", 1:"..X.. .XX.. ..X.. ..X.. ..X.. ..X.. .XXX.",
+  2:".XXX. X...X ....X ...X. ..X.. .X... XXXXX", 3:"XXXX. ....X ....X .XXX. ....X ....X XXXX.",
+  4:"...X. ..XX. .X.X. X..X. XXXXX ...X. ...X.", 5:"XXXXX X.... XXXX. ....X ....X X...X .XXX.",
+  6:".XXX. X.... X.... XXXX. X...X X...X .XXX.", 7:"XXXXX ....X ...X. ..X.. .X... .X... .X...",
+  8:".XXX. X...X X...X .XXX. X...X X...X .XXX.", 9:".XXX. X...X X...X .XXXX ....X ....X .XXX.",
+  "!":"..X.. ..X.. ..X.. ..X.. ..X.. ..... ..X..", "?":".XXX. X...X ....X ...X. ..X.. ..... ..X..",
+  ".":"..... ..... ..... ..... ..... ..X.. ..X..", ",":"..... ..... ..... ..... ..X.. ..X.. .X...",
+  "-":"..... ..... ..... XXXXX ..... ..... .....", "<":".X.X. XXXXX XXXXX XXXXX .XXX. ..X.. .....",
+};
+const GW = 6, GH = 7, GAP = 1, SPW = 3;   // 굵게 만든 뒤 글자 폭 6칸
+const embolden = rows => rows.map(r => [...r].map((c, i) => (c === "X" || (i > 0 && r[i - 1] === "X")) ? "X" : ".").join("") + (r[4] === "X" ? "X" : "."));
+const lineUnits = s => { let cx = 0; for (const ch of s) cx += (FONT[ch] ? GW : SPW) + GAP; return Math.max(cx - GAP, 1); };
+
+const cv = document.getElementById("c");
+const ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+const mk = (w, h, dpr = DPR) => {
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.ceil(w * dpr)); c.height = Math.max(1, Math.ceil(h * dpr));
+  const x = c.getContext("2d"); x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  x.imageSmoothingQuality = "high";
+  return [c, x];
+};
+
+// ───────── 상태 ─────────
+let led, lctx, settled, sctx, glowC, gctx, ovl, term, glitch;
+let dots = [], ri = 0, si = 0, lines = [], L = {};
+let sprDot = [], sprHot = [], sprPale, sprHeart = [], sprFl = [], bright = null;
+let hpts = [], R = 46, sparks = [], floaters = [], acc = 0, facc = 0, burst = false, gframe = 0, frame = 0;
+let t = 0, tTurn = 0, tLed = 0, tDone = 0, tHeart = 0, tSig = 0, tEnd = 0;
+let rain = null, sig = [];
+
+// ───────── 터미널 스크립트 ─────────
+function makeTerm() {
+  const items = [
+    ["t", [["root@my-heart", G], [":~# ", WH], ["./unlock_heart.sh --target ", WH], ['"' + CFG.to + '"', YE]], 34, 0.5],
+    ["t", [["[*] ", C], ["establishing connection ........ ", WH], ["OK", G]], 60, 0.3],
+    ["t", [["[*] ", C], ["bypassing \"I'm not ready\" firewall .. ", WH], ["OK", G]], 60, 0.3],
+    ["t", [["[*] ", C], ["injecting feelings.dll ............ ", WH], ["OK", G]], 60, 0.3],
+    ["bar", "[*] decrypting her heart", 1.9, 0.35],
+    ["t", [["[+] ", P], ["1 secret found: ", WH], ["it's all about you", P]], 40, 0.7],
+    ["t", [["root@my-heart", G], [":~# ", WH], ["python3 love.py", WH]], 30, 0.9],
+  ];
+  const out = []; let tt = 0.5;
+  for (const it of items) {
+    if (it[0] === "t") { const n = it[1].reduce((a, s) => a + s[0].length, 0); out.push({ k: "t", segs: it[1], st: tt, n, cps: it[2] }); tt += n / it[2] + it[3]; }
+    else { out.push({ k: "bar", label: it[1], st: tt, dur: it[2] }); tt += it[2] + it[3]; }
+  }
+  return { items: out, end: tt };
+}
+
+function drawSegs(x, y, segs, n, size, bold) {
+  ctx.textBaseline = "top";
+  for (const [text, col] of segs) {
+    if (n <= 0) break;
+    const part = text.slice(0, n); n -= part.length;
+    ctx.font = `${bold ? "bold " : ""}${size}px ${fam(part)}`;
+    ctx.fillStyle = rgb(col);
+    ctx.fillText(part, x, y);
+    x += ctx.measureText(part).width;
+  }
+  return x;
+}
+function segsWidth(segs, size) {
+  let w = 0;
+  for (const [text] of segs) { ctx.font = `${size}px ${fam(text)}`; w += ctx.measureText(text).width; }
+  return w;
+}
+
+// ───────── 레이아웃(화면 크기가 바뀔 때마다 다시 계산) ─────────
+function build() {
+  W = cv.clientWidth; H = cv.clientHeight;
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  [led, lctx] = mk(W, H); [settled, sctx] = mk(W, H);
+  [glowC, gctx] = mk(Math.ceil(W / 5), Math.ceil(H / 5), 1);
+  // 가로 화면 전용: 세로일 때는 draw 에서 "돌려주세요" 안내만 보여준다.
+
+  // 글자 줄 나누기: 문구가 아주 길어서 한 줄로는 너무 작아질 때만 두 줄로 쪼갠다
+  const text = CFG.text.toUpperCase().trim() || "I LOVE YOU";
+  const words = text.split(/\s+/);
+  const cands = [[text]];
+  if (words.length > 1) {
+    let best = null;
+    for (let k = 1; k < words.length; k++) {
+      const a = words.slice(0, k).join(" "), b = words.slice(k).join(" ");
+      const m = Math.max(lineUnits(a), lineUnits(b));
+      if (!best || m < best.m) best = { m, ls: [a, b] };
+    }
+    cands.push(best.ls);
+  }
+  let pick = null;
+  for (const ls of cands) {
+    const maxU = Math.max(...ls.map(lineUnits));
+    const hU = GH * ls.length + 2 * (ls.length - 1);
+    const fw = Math.min(0.9 * W / maxU, 0.36 * H / (2 * hU), 20);
+    if (!pick || fw > pick.fw) pick = { ls, maxU, hU, fw };
+  }
+  lines = pick.ls;
+  const fw = pick.fw, fh = fw * 2, dx = fw / 4, dy = fh / 4;
+  const bw = Math.ceil(pick.maxU * fw), bh = Math.ceil(pick.hU * fh);
+  const textC = lines.length > 1 ? 0.36 : 0.38;
+  const ox = (W - bw) / 2, oy = textC * H - bh / 2;
+  const unitsArr = lines.map(lineUnits), totalU = unitsArr.reduce((a, b) => a + b, 0);
+  const cum = []; unitsArr.reduce((a, u) => (cum.push(a), a + u), 0);
+  L = { fw, fh, dx, dy, bw, bh, ox, oy, totalU, cum, unitsArr, maxU: pick.maxU, heartC: 0.68,
+        sig1: 0.84, sig2: 0.905, sk: clamp(fw / 12, 0.5, 1.5) };
+
+  // 글자 마스크 -> 번지게 해서 모서리를 둥글린다
+  const [mc, mx] = mk(bw, bh, 1);
+  mx.fillStyle = "#fff";
+  lines.forEach((ln, li) => {
+    const sx = (pick.maxU - unitsArr[li]) * fw / 2; let cx = 0;
+    for (const ch of ln) {
+      if (FONT[ch]) {
+        embolden(FONT[ch].split(" ")).forEach((row, ry) => [...row].forEach((c, rx) => {
+          if (c === "X") mx.fillRect(sx + (cx + rx) * fw, (li * (GH + 2) + ry) * fh, fw + 0.5, fh + 0.5);
+        }));
+        cx += GW + GAP;
+      } else cx += SPW + GAP;
+    }
+  });
+  const r = Math.max(2, Math.round(fw * 0.5));
+  const [sm, smx] = mk(Math.ceil(bw / r), Math.ceil(bh / r), 1);
+  smx.drawImage(mc, 0, 0, sm.width, sm.height);
+  const [bl, blx] = mk(bw, bh, 1);
+  blx.drawImage(sm, 0, 0, bw, bh);
+  const px = blx.getImageData(0, 0, bw, bh).data;
+
+  dots = [];
+  for (let gy = 0; gy < bh; gy += dy) {
+    const li = Math.min(lines.length - 1, Math.floor(gy / ((GH + 2) * fh)));
+    const lineTop = li * (GH + 2) * fh, sx = (pick.maxU - unitsArr[li]) * fw / 2;
+    for (let gx = 0; gx < bw; gx += dx) {
+      const sxp = Math.min(bw - 1, Math.floor(gx + dx / 2)), syp = Math.min(bh - 1, Math.floor(gy + dy / 2));
+      if (px[(syp * bw + sxp) * 4 + 3] > 128) {   // 투명 배경이라 알파값 기준으로 자른다
+        const u = clamp((gx - sx) / fw, 0, unitsArr[li]);
+        const reveal = (cum[li] + u) / totalU * T_WRITE + clamp((gy - lineTop) / (GH * fh), 0, 1) * 0.18 + rnd(0, 0.12);
+        dots.push({ x: ox + gx, y: oy + gy, r: reveal, s: (Math.random() * 4) | 0 });
+      }
+    }
+  }
+  dots.sort((a, b) => a.r - b.r);
+
+  // 스프라이트
+  const dw = dx * 1.33, dh = dy * 0.67, sw = dw + 2, sh = dh + 2;
+  L.sw = sw; L.sh = sh;
+  const sp = (col, glow) => { const [c, x] = mk(sw, sh);
+    if (glow) { x.fillStyle = rgb(col, 0.3); x.beginPath(); x.ellipse(sw / 2, sh / 2, sw / 2, sh / 2, 0, 0, 7); x.fill(); }
+    x.fillStyle = rgb(col); x.beginPath(); x.ellipse(sw / 2, sh / 2, dw / 2, dh / 2, 0, 0, 7); x.fill(); return c; };
+  sprDot = [0.80, 0.88, 0.94, 1].map(s => sp(RED.map(v => v * s)));
+  sprHot = Array.from({ length: 10 }, (_, i) => sp(lerpC(RED, HOTC, (i + 1) / 10), i > 2));
+  sprPale = sp(PALE);
+  bright = null;
+
+  // 하트
+  R = clamp(Math.min(W * 0.13, H * 0.077), 28, 70);
+  hpts = [];
+  for (let y = -1.15; y < 1.4; y += dy / R) for (let x = -1.4; x < 1.4; x += dx / R)
+    if (Math.pow(x * x + y * y - 1, 3) - x * x * y * y * y <= 0) hpts.push([x, y, Math.min(4, Math.floor(clamp((y + 1) / 2.25) * 4.99))]);
+  sprHeart = [];
+  for (let g = 0; g < 5; g++) { const row = [], base = lerpC(HB, HT, g / 4);
+    for (let m = 0; m < 10; m++) { const v = 0.15 + m / 9 * 1.1; let col = base.map(c => c * Math.min(v, 1));
+      if (v > 1) col = lerpC(col, [255, 235, 240], (v - 1) / 0.25 * 0.6); row.push(sp(col)); }
+    sprHeart.push(row); }
+  const k = clamp(W / 800, 0.8, 1.3);
+  sprFl = [];
+  for (const s of [9, 13, 18]) for (const col of [[255, 60, 110], [255, 100, 145], [215, 30, 70]]) {
+    const z = s * k, [c, x] = mk(z, z); x.fillStyle = rgb(col);
+    x.beginPath(); x.arc(z * 0.30, z * 0.32, z * 0.27, 0, 7); x.arc(z * 0.70, z * 0.32, z * 0.27, 0, 7); x.fill();
+    x.beginPath(); x.moveTo(z * 0.05, z * 0.42); x.lineTo(z * 0.5, z * 0.96); x.lineTo(z * 0.95, z * 0.42); x.fill(); sprFl.push([c, z]); }
+
+  // 고백 문구 (코드 한 줄 + 한글 메시지)
+  const msg = `${CFG.to}, ${CFG.msg}` + (CFG.from ? `   - ${CFG.from}` : "");
+  const defs = [
+    { segs: [["while ", MG], ["True", YE], [": ", WH], ["love", C], ["(", WH], [CFG.to, YE], [")", WH], ["   # never breaks", DIM]], cps: 26, start: clamp(H * 0.045, 12, 24), y: L.sig1 },
+    { segs: [[msg, [255, 170, 200]]], cps: 14, start: clamp(H * 0.045, 12, 24), y: L.sig2 },
+  ];
+  sig = defs.map(d => { const w0 = segsWidth(d.segs, d.start), size = d.start * Math.min(1, 0.92 * W / w0);
+    return { ...d, size, width: segsWidth(d.segs, size), n: d.segs.reduce((a, s) => a + s[0].length, 0) }; });
+
+  // 터미널 / 글리치
+  term = makeTerm();
+  L.ts = clamp(Math.min(0.92 * W / (46 * 0.6), H * 0.05), 11, 22);   // 낮은 가로 화면에서도 7줄이 들어가게
+  L.tY = clamp(H * 0.06, 22, 60);
+  tTurn = term.end + 0.4; tLed = term.end + 2.0;
+  tDone = tLed + T_WRITE + 1.0; tHeart = tLed + T_WRITE + 0.6; tSig = tHeart + 1.8;
+  tEnd = tSig + sig[0].n / sig[0].cps + 0.4 + sig[1].n / sig[1].cps + 2.5;
+
+  const probe = mk(10, 10, 1)[1]; probe.font = `bold 100px ${MONO}`;
+  const gs = Math.min(90, H * 0.16, 0.88 * W / probe.measureText("ACCESS GRANTED").width * 100);
+  const gw = Math.ceil(probe.measureText("ACCESS GRANTED").width * gs / 100) + 8, gh = Math.ceil(gs * 1.3);
+  glitch = { gs, gw, gh, src: [G, [0, 255, 255], [255, 0, 70]].map(col => { const [c, x] = mk(gw, gh);
+    x.font = `bold ${gs}px ${MONO}`; x.textBaseline = "top"; x.fillStyle = rgb(col); x.fillText("ACCESS GRANTED", 4, gs * 0.1); return c; }) };
+
+  // 코드비
+  const cw = W < 600 ? 14 : 15, ch = cw * 1.3;
+  const cols = Math.floor(W / cw), rows = Math.ceil(H / ch) + 2;
+  const chars = "01010101ABCDEF<>/{}[]=+*#$%&";
+  rain = { cw, ch, cols, rows, chars, head: Array.from({ length: cols }, () => rnd(-rows, rows)),
+    speed: Array.from({ length: cols }, () => rnd(5, 16)), len: Array.from({ length: cols }, () => (rnd(9, 24)) | 0),
+    grid: Array.from({ length: cols }, () => Array.from({ length: rows }, () => chars[(Math.random() * chars.length) | 0])) };
+
+  // 스캔라인 + 비네팅
+  [ovl] = mk(W, H); const ox2 = ovl.getContext("2d");
+  ox2.fillStyle = "rgba(0,0,0,0.24)"; for (let y = 0; y < H; y += 3) ox2.fillRect(0, y, W, 1);
+  const gr = ox2.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.78);
+  gr.addColorStop(0, "rgba(0,0,0,0)"); gr.addColorStop(1, "rgba(0,0,0,0.78)");
+  ox2.fillStyle = gr; ox2.fillRect(0, 0, W, H);
+
+  ri = si = 0; bright = null; glow = false; advance();
+}
+let glow = false;
+
+// ───────── 갱신 ─────────
+function advance() {
+  const wt = t - tLed, n = dots.length;
+  while (ri < n && dots[ri].r <= wt) ri++;
+  sctx.globalCompositeOperation = "lighten";
+  while (si < ri && dots[si].r + HOT_TIME <= wt) {
+    const d = dots[si]; sctx.drawImage(sprDot[d.s], d.x - 1, d.y - 1, L.sw, L.sh); si++;
+  }
+}
+function lineAt(p) { // 진행률 p(0~1) -> 현재 쓰고 있는 줄과 x
+  const u = p * L.totalU; let li = 0;
+  for (let i = 0; i < lines.length; i++) if (u >= L.cum[i]) li = i;
+  const sx = (L.maxU - L.unitsArr[li]) * L.fw / 2;
+  return { li, x: L.ox + sx + clamp(u - L.cum[li], 0, L.unitsArr[li]) * L.fw,
+           top: L.oy + li * (GH + 2) * L.fh, h: GH * L.fh };
+}
+function update(dt) {
+  t += dt;
+  // 코드비
+  for (let i = 0; i < rain.cols; i++) {
+    rain.head[i] += rain.speed[i] * dt;
+    if (rain.head[i] - rain.len[i] > rain.rows) { rain.head[i] = -rnd(0, 12); rain.speed[i] = rnd(5, 16); rain.len[i] = (rnd(9, 24)) | 0; }
+    if (Math.random() < 0.12) rain.grid[i][(Math.random() * rain.rows) | 0] = rain.chars[(Math.random() * rain.chars.length) | 0];
+  }
+  advance();
+  const wt = t - tLed, sk = L.sk;
+  if (wt >= 0 && wt <= T_WRITE + 0.2) {
+    const f = lineAt(Math.min(wt / T_WRITE, 1));
+    acc += dt * 170;
+    while (acc >= 1) {
+      acc -= 1; const r = Math.random();
+      if (r < 0.55) sparks.push({ x: f.x + rnd(-3, 6) * sk, y: f.top + f.h * rnd(0.3, 1), vx: rnd(0.5, 1.7) * sk, vy: rnd(0.4, 1.6) * sk, l: rnd(0.25, 0.65) });
+      else if (r < 0.85) { const k = Math.random(); sparks.push({ x: f.x + k * 40 * sk, y: f.top + f.h + k * 50 * sk, vx: rnd(0.2, 0.6) * sk, vy: rnd(0.2, 0.6) * sk, l: rnd(0.2, 0.45) }); }
+      else sparks.push({ x: f.x + rnd(-8, 12) * sk, y: f.top - rnd(0, 8) * sk, vx: rnd(-0.3, 0.8) * sk, vy: -rnd(0.3, 1.4) * sk, l: rnd(0.2, 0.5) });
+    }
+  }
+  for (const s of sparks) { s.l -= dt; s.x += s.vx * dt * 60; s.y += s.vy * dt * 60; s.m = s.m || s.l; }
+  sparks = sparks.filter(s => s.l > 0);
+
+  if (t >= tHeart && !burst) {
+    burst = true;
+    for (let i = 0; i < 14; i++) floaters.push(newFloater(W / 2 + rnd(-70, 70), H * L.heartC + rnd(-30, 40)));
+  }
+  if (t >= tHeart + 1) { facc += dt * 2.4; while (facc >= 1) { facc -= 1; floaters.push(newFloater(rnd(W * 0.2, W * 0.8), H * rnd(L.heartC + 0.12, L.heartC + 0.2))); } }
+  for (const f of floaters) { f.l -= dt; f.y += f.vy * dt; }
+  floaters = floaters.filter(f => f.l > 0);
+}
+function newFloater(x, y) {
+  const m = rnd(3.2, 5.0);
+  return { x, y, vy: -rnd(28, 60) * clamp(H / 700, 0.7, 1.3), ph: rnd(0, 6.28), sw: rnd(10, 22), m, l: m, spr: sprFl[(Math.random() * sprFl.length) | 0] };
+}
+
+// ───────── 그리기 ─────────
+function draw() {
+  ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
+  ctx.fillStyle = "#020204"; ctx.fillRect(0, 0, W, H);
+
+  // 코드비: 초록 -> 빨강
+  const k = clamp((t - tTurn) / 2);
+  const tint = lerpC([16, 105, 52], [130, 14, 36], k).map(v => v | 0);
+  ctx.font = `${rain.cw}px ${MONO}`; ctx.textBaseline = "top"; ctx.fillStyle = `rgb(${tint})`;
+  for (let i = 0; i < rain.cols; i++) {
+    const hd = Math.floor(rain.head[i]), ln = rain.len[i], x = i * rain.cw;
+    for (let j = 0; j < ln; j++) {
+      const row = hd - j; if (row < 0 || row >= rain.rows) continue;
+      const lv = j === 0 ? 6 : Math.max(0, 5 - Math.floor(j * 6 / ln));
+      ctx.globalAlpha = Math.pow((lv + 1) / 7, 1.7);
+      ctx.fillText(rain.grid[i][row], x, row * rain.ch);
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  if (t < tLed) drawTerm();
+  if (t >= tLed) drawLed();
+
+  ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
+  ctx.drawImage(ovl, 0, 0, W, H);
+}
+
+function drawTerm() {
+  const fade = t < tTurn + 0.8 ? 1 : clamp(1 - (t - tTurn - 0.8) / 0.7);
+  ctx.globalAlpha = fade;
+  const size = L.ts, lh = size * 1.45, X = clamp(W * 0.04, 16, 46), Y = L.tY;
+  let y = Y, last = null;
+  for (const it of term.items) {
+    if (t < it.st) break;
+    let x;
+    if (it.k === "t") x = drawSegs(X, y, it.segs, Math.min(Math.floor((t - it.st) * it.cps), it.n), size);
+    else {
+      const p = clamp((t - it.st) / it.dur), kk = Math.floor(p * 24);
+      x = drawSegs(X, y, [[it.label, C], [" [", WH], ["#".repeat(kk), G], ["-".repeat(24 - kk), DIM], [`] ${String(Math.floor(p * 100)).padStart(3, " ")}%`, WH]], 999, size);
+    }
+    last = [x, y]; y += lh;
+  }
+  if (last && Math.floor(t * 2.2) % 2 === 0) { ctx.fillStyle = rgb(G); ctx.fillRect(last[0] + 3, last[1] + 2, size * 0.5, size); }
+  ctx.globalAlpha = 1;
+
+  const gl = t - tTurn;
+  if (gl >= 0 && gl <= 1.2) {
+    const amount = 0.55 * (1 - gl / 1.2) + 0.06, G2 = glitch;
+    const x0 = (W - G2.gw) / 2, y0 = Math.max(H / 2 - G2.gh / 2 + 20, L.tY + 7 * lh + 8);   // 터미널 글자와 겹치지 않게
+    ctx.globalCompositeOperation = "lighter";
+    for (let yy = 0; yy < G2.gh; yy += 5) {
+      const d = Math.random() < amount ? rnd(-20, 20) * clamp(W / 1000, 0.4, 1) : 0;
+      const h = Math.min(5, G2.gh - yy);
+      ctx.drawImage(G2.src[1], 0, yy * DPR, G2.gw * DPR, h * DPR, x0 + d - 4, y0 + yy, G2.gw, h);
+      ctx.drawImage(G2.src[2], 0, yy * DPR, G2.gw * DPR, h * DPR, x0 + d + 4, y0 + yy, G2.gw, h);
+      ctx.drawImage(G2.src[0], 0, yy * DPR, G2.gw * DPR, h * DPR, x0 + d, y0 + yy, G2.gw, h);
+    }
+    if (gl > 0.25) { const fs = clamp(W * 0.034, 13, 24); ctx.font = `${fs}px ${MONO}`; ctx.fillStyle = rgb(P); ctx.textAlign = "center";
+      ctx.fillText("[ heart.db  unlocked ]", W / 2, y0 + G2.gh + 12); ctx.textAlign = "left"; }
+    ctx.globalCompositeOperation = "source-over";
+  }
+}
+
+function drawLed() {
+  const wt = t - tLed;
+  lctx.globalCompositeOperation = "source-over"; lctx.globalAlpha = 1;
+  lctx.clearRect(0, 0, W, H);
+  lctx.drawImage(settled, 0, 0, W, H);
+  lctx.globalCompositeOperation = "lighten";
+  for (let i = si; i < ri; i++) {
+    const d = dots[i], heat = 1 - (wt - d.r) / HOT_TIME;
+    lctx.drawImage(sprHot[Math.min(9, Math.max(0, Math.floor(heat * 10)))], d.x - 1, d.y - 1, L.sw, L.sh);
+  }
+  // 완성 후 가끔 지나가는 반짝임
+  if (t > tDone) {
+    const ph = ((t - tDone) % 4.2) / 1.3;
+    if (ph < 1) {
+      if (!bright) { const [bc, bx] = mk(W, H); bx.globalCompositeOperation = "lighten";
+        for (const d of dots) bx.drawImage(sprPale, d.x - 1, d.y - 1, L.sw, L.sh); bright = bc; }
+      const bx0 = L.ox - 40 + ph * (L.bw + 80), bwid = 40;
+      lctx.save(); lctx.beginPath(); lctx.rect(bx0 - bwid / 2, 0, bwid, H); lctx.clip();
+      lctx.drawImage(bright, 0, 0, W, H); lctx.restore();
+    }
+  }
+  drawHeart();
+  lctx.globalCompositeOperation = "source-over";
+  for (const f of floaters) {
+    lctx.globalAlpha = clamp(Math.min(1, (f.l / f.m) * 2, (f.m - f.l) * 2)) * 0.92;
+    lctx.drawImage(f.spr[0], f.x + Math.sin(f.ph + (f.m - f.l) * 1.6) * f.sw, f.y, f.spr[1], f.spr[1]);
+  }
+  lctx.globalAlpha = 1;
+  for (const s of sparks) {
+    const fr = s.l / s.m; lctx.fillStyle = `rgb(255,${(120 + 110 * fr) | 0},${(40 + 90 * fr) | 0})`;
+    const z = fr > 0.5 ? 2 : 1; lctx.fillRect(s.x, s.y, z, z);
+  }
+
+  // 네온 번짐 (두 프레임에 한 번만 갱신)
+  if (!glow || ++gframe % 2 === 0) { gctx.clearRect(0, 0, glowC.width, glowC.height); gctx.drawImage(led, 0, 0, glowC.width, glowC.height); glow = true; }
+  ctx.globalCompositeOperation = "lighter";
+  ctx.drawImage(led, 0, 0, W, H);
+  ctx.drawImage(glowC, 0, 0, W, H); ctx.drawImage(glowC, 0, 0, W, H);
+  ctx.globalCompositeOperation = "source-over";
+
+  // 코드로 쓴 고백 문구
+  if (t >= tSig) {
+    let st = tSig;
+    for (const s of sig) {
+      const n = Math.min(Math.floor((t - st) * s.cps), s.n); if (n <= 0) break;
+      drawSegs((W - s.width) / 2, s.y * H, s.segs, n, s.size);
+      st += s.n / s.cps + 0.4;
+    }
+  }
+  if (t > tEnd) { // 다시 보기 안내
+    ctx.globalAlpha = clamp((t - tEnd) / 1.5) * 0.55; ctx.fillStyle = rgb(DIM); ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    ctx.font = `${clamp(W * 0.03, 12, 15)}px ${KR}`; ctx.fillText("화면을 터치하면 처음부터 다시 볼 수 있어요", W / 2, 24);   // 아래쪽 고백 문구와 겹치지 않게 위에 둔다
+    ctx.textAlign = "left"; ctx.globalAlpha = 1;
+  }
+}
+
+function drawHeart() {
+  const a = clamp((t - tHeart) / 1.4); if (a <= 0) return;
+  const p = ((t - tHeart) * 1.1) % 1;
+  const beat = Math.exp(-(((p - 0.08) / 0.06) ** 2)) + 0.7 * Math.exp(-(((p - 0.30) / 0.06) ** 2));
+  const s = 1 + 0.09 * beat, mi = Math.floor(clamp(a * (0.9 + 0.35 * beat) / 1.25) * 9);
+  const cx = W / 2, cy = H * L.heartC;
+  lctx.globalCompositeOperation = "lighten";
+  for (const [x, y, g] of hpts) lctx.drawImage(sprHeart[g][mi], cx + x * R * s - 1, cy - y * R * s - 1, L.sw, L.sh);
+}
+
+// ───────── 시작 / 반복 ─────────
+function reset() { t = 0; ri = si = 0; sparks = []; floaters = []; burst = false; acc = facc = 0; bright = null; glow = false;
+  sctx.setTransform(1, 0, 0, 1, 0, 0); sctx.clearRect(0, 0, settled.width, settled.height); sctx.setTransform(DPR, 0, 0, DPR, 0, 0); }
+
+// 세로 화면: 애니메이션은 멈춰 두고 "가로로 돌려주세요" 안내만 보여준다 (가로로 돌리면 이어서 재생)
+function drawRotate(now) {
+  ctx.globalCompositeOperation = "source-over"; ctx.globalAlpha = 1;
+  ctx.fillStyle = "#020204"; ctx.fillRect(0, 0, W, H);
+  const s = Math.min(W, H) * 0.22, cx = W / 2, cy = H * 0.42;
+  const k = (Math.sin(now / 700) + 1) / 2;                    // 0~1 왕복
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(-k * Math.PI / 2);
+  ctx.strokeStyle = rgb(HT); ctx.lineWidth = 3; ctx.lineJoin = "round";
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(-s * 0.3, -s * 0.55, s * 0.6, s * 1.1, 7); else ctx.rect(-s * 0.3, -s * 0.55, s * 0.6, s * 1.1);
+  ctx.stroke();
+  ctx.fillStyle = rgb(HT); ctx.beginPath(); ctx.arc(0, s * 0.42, 2.5, 0, 7); ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = rgb(WH); ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+  ctx.font = `bold ${clamp(W * 0.056, 16, 26)}px ${KR}`;
+  ctx.fillText("폰을 가로로 돌려주세요", W / 2, H * 0.42 + s * 1.05);
+  ctx.fillStyle = rgb(DIM); ctx.font = `${clamp(W * 0.04, 12, 16)}px ${KR}`;
+  const gap = clamp(W * 0.075, 24, 34);
+  ctx.fillText("가로 화면에서 가장 예쁘게 보여요", W / 2, H * 0.42 + s * 1.05 + gap);
+  ctx.globalAlpha = 0.7; ctx.font = `${clamp(W * 0.034, 11, 14)}px ${KR}`;
+  ctx.fillText("안 돌아가면 아이폰 제어센터의 '세로 방향 고정'을 꺼주세요", W / 2, H * 0.42 + s * 1.05 + gap * 1.9);
+  ctx.globalAlpha = 1; ctx.textAlign = "left";
+}
+
+let last = 0;
+function loop(now) {
+  const dt = Math.min((now - last) / 1000, 0.05); last = now;
+  if (W < H) drawRotate(now);
+  else { update(dt); draw(); }
+  requestAnimationFrame(loop);
+}
+cv.addEventListener("pointerdown", () => {
+  if (W < H) return;
+  if (t < tLed - 0.5) t = tLed;               // 인트로 중 터치하면 건너뛰기
+  else if (t > tEnd - 1) reset();             // 끝난 뒤 터치하면 처음부터 다시
+});
+document.addEventListener("visibilitychange", () => { last = performance.now(); });
+let rt = 0;
+new ResizeObserver(() => { clearTimeout(rt); rt = setTimeout(() => { const keep = t; build(); t = keep; advance(); }, 120); }).observe(cv);
+
+build();
+const m = location.hash.match(/t=(\d+(\.\d+)?)/);   // #t=20 처럼 붙이면 해당 시점부터 보기 (확인용)
+if (m) { const target = +m[1]; while (t < target) update(1 / 30); }
+requestAnimationFrame(n => { last = n; loop(n); });
+})();
+</script>
+
+</html>
